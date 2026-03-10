@@ -11,20 +11,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-# 导入现有模块
-import sys
-sys.path.append(str(Path(__file__).parent.parent))
-from scripts.data_fetcher import get_daily_data
-from scripts.trend_analyzer import StockTrendAnalyzer
-
 logger = logging.getLogger(__name__)
 
 
 class AStockBacktestEngine:
     """A股回测引擎"""
 
-    def __init__(self, config: Optional[Dict] = None):
-        """初始化回测引擎"""
+    def __init__(self, config: Optional[Dict] = None, data_fetcher=None, analyzer=None):
+        """初始化回测引擎
+
+        Args:
+            config: 回测配置
+            data_fetcher: 数据获取函数（可选）
+            analyzer: 技术分析器（可选）
+        """
         self.config = config or {}
         self.init_cash = self.config.get("init_cash", 1_000_000)
         self.fees = self.config.get("fees", {})
@@ -36,10 +36,33 @@ class AStockBacktestEngine:
         self.cash = self.init_cash
         self.equity_curve = []
 
-        # 分析器
-        self.analyzer = StockTrendAnalyzer()
+        # 分析器和数据获取器（外部传入）
+        self.data_fetcher = data_fetcher
+        self.analyzer = analyzer
 
     def fetch_data(self, code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        """
+        获取股票历史数据
+
+        Args:
+            code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            股票数据DataFrame
+        """
+        if self.data_fetcher is None:
+            logger.warning("未提供数据获取器，请从外部传入")
+            return None
+
+        # 计算需要的数据天数
+        from datetime import datetime
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        days = (end_dt - start_dt).days + 30  # 多取30天确保数据充足
+
+        return self.data_fetcher(code, days=days)
         """
         获取股票历史数据
 

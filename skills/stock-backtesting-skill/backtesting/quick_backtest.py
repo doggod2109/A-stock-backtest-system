@@ -3,13 +3,19 @@
 """
 快速回测脚本
 修改 config_template.py 后运行此脚本
+
+注意：此脚本需要配合 stock-daily-analysis-skill 使用
 """
 
 import sys
 from pathlib import Path
 
-# 添加父目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 添加 stock-daily-analysis-skill 到路径（用于数据获取和分析）
+stock_analysis_path = Path(__file__).parent.parent.parent / "stock-daily-analysis-skill"
+if stock_analysis_path.exists():
+    sys.path.insert(0, str(stock_analysis_path))
+    from scripts.data_fetcher import get_daily_data
+    from scripts.trend_analyzer import StockTrendAnalyzer
 
 from config_template import (
     STOCK_CODES,
@@ -61,8 +67,18 @@ def run_backtest():
     print("🚀 开始回测")
     print("=" * 70 + "\n")
 
-    # 创建回测引擎
-    engine = AStockBacktestEngine(config)
+    # 检查是否可以访问数据获取和分析模块
+    try:
+        from scripts.data_fetcher import get_daily_data
+        from scripts.trend_analyzer import StockTrendAnalyzer
+        has_stock_analysis = True
+    except ImportError:
+        print("⚠️  未找到 stock-daily-analysis-skill，无法运行回测")
+        print("   请确保 stock-daily-analysis-skill 位于 ../stock-daily-analysis-skill")
+        return
+
+    # 创建回测引擎，传入数据获取和分析器
+    engine = AStockBacktestEngine(config, data_fetcher=get_daily_data, analyzer=StockTrendAnalyzer())
 
     # 运行回测
     result = engine.run_backtest(STOCK_CODES, START_DATE, END_DATE, WEIGHTS)
