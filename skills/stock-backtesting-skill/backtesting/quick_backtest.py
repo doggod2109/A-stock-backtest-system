@@ -10,8 +10,12 @@
 import sys
 from pathlib import Path
 
+# 添加当前目录到路径
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+
 # 添加 stock-daily-analysis-skill 到路径（用于数据获取和分析）
-stock_analysis_path = Path(__file__).parent.parent.parent / "stock-daily-analysis-skill"
+stock_analysis_path = current_dir.parent.parent / "stock-daily-analysis-skill"
 if stock_analysis_path.exists():
     sys.path.insert(0, str(stock_analysis_path))
     from scripts.data_fetcher import get_daily_data
@@ -30,9 +34,9 @@ from config_template import (
     STOP_LOSS,
     TAKE_PROFIT,
 )
-from backtesting.config import BACKTEST_CONFIG, SIGNAL_CONFIG
-from backtesting.engine import AStockBacktestEngine
-from backtesting.report_generator import ReportGenerator
+from config import BACKTEST_CONFIG, SIGNAL_CONFIG
+from engine import AStockBacktestEngine
+from report_generator import ReportGenerator
 
 
 def run_backtest():
@@ -71,7 +75,6 @@ def run_backtest():
     try:
         from scripts.data_fetcher import get_daily_data
         from scripts.trend_analyzer import StockTrendAnalyzer
-        has_stock_analysis = True
     except ImportError:
         print("⚠️  未找到 stock-daily-analysis-skill，无法运行回测")
         print("   请确保 stock-daily-analysis-skill 位于 ../stock-daily-analysis-skill")

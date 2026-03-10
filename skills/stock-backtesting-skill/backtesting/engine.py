@@ -83,17 +83,22 @@ class AStockBacktestEngine:
             # 至少获取1000天数据
             days = max(days_needed, 1000)
 
-            df = get_daily_data(code, days=days)
+            df = self.data_fetcher(code, days=days)
             if df.empty:
                 return None
 
-            # 过滤日期范围
+            # 确保date列是datetime类型
             df['date'] = pd.to_datetime(df['date'])
+
+            # 过滤日期范围
             df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
             if df.empty:
                 return None
 
-            return df.set_index('date').sort_index()
+            # 设置日期索引，确保索引是DatetimeIndex
+            df = df.set_index('date').sort_index()
+
+            return df
         except Exception as e:
             logger.error(f"获取 {code} 数据失败: {e}")
             return None
@@ -371,7 +376,7 @@ class AStockBacktestEngine:
         }
 
         self.trades.append({
-            'date': date,
+            'date': date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date),
             'code': code,
             'action': 'buy',
             'price': price,
@@ -402,7 +407,7 @@ class AStockBacktestEngine:
         # 记录盈亏
         profit = (price - avg_price) * quantity
         self.trades.append({
-            'date': date,
+            'date': date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date),
             'code': code,
             'action': 'sell',
             'price': price,
