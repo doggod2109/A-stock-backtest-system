@@ -50,30 +50,12 @@ class AStockBacktestEngine:
             end_date: 结束日期
 
         Returns:
-            股票数据DataFrame
+            DataFrame
         """
         if self.data_fetcher is None:
             logger.warning("未提供数据获取器，请从外部传入")
             return None
 
-        # 计算需要的数据天数
-        from datetime import datetime
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        days = (end_dt - start_dt).days + 30  # 多取30天确保数据充足
-
-        return self.data_fetcher(code, days=days)
-        """
-        获取股票历史数据
-
-        Args:
-            code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-
-        Returns:
-            DataFrame
-        """
         try:
             # 计算需要的天数，确保能获取到足够的历史数据
             start_dt = pd.to_datetime(start_date)
@@ -88,15 +70,23 @@ class AStockBacktestEngine:
                 return None
 
             # 确保date列是datetime类型
-            df['date'] = pd.to_datetime(df['date'])
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                # 设置日期索引
+                df = df.set_index('date').sort_index()
+            else:
+                logger.warning(f"{code} 数据中没有 date 列")
+                return None
 
             # 过滤日期范围
-            df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+            df = df[(df.index >= start_date) & (df.index <= end_date)]
             if df.empty:
                 return None
 
-            # 设置日期索引，确保索引是DatetimeIndex
-            df = df.set_index('date').sort_index()
+            # 确保索引是DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                logger.warning(f"{code} 索引不是DatetimeIndex，尝试转换")
+                df.index = pd.to_datetime(df.index)
 
             return df
         except Exception as e:
