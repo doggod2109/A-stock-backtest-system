@@ -1,0 +1,329 @@
+# -*- coding: utf-8 -*-
+"""
+数据获取模块 - 基于新浪财经的多市场数据获取
+支持 A股、港股、美股行情获取
+"""
+
+import logging
+import re
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
+
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
+
+# 配置requests重试机制
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+
+session = requests.Session()
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+requests.Session = lambda: session
+
+
+@dataclass
+class StockQuote:
+    """统一实时行情数据结构"""
+    code: str
+    name: str = ""
+    price: float = 0.0
+    change_pct: float = 0.0
+    change_amount: float = 0.0
+    volume: int = 0
+    amount: float = 0.0
+    open_price: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    pre_close: float = 0.0
+    volume_ratio: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    pe_ratio: Optional[float] = None
+    pb_ratio: Optional[float] = None
+    total_mv: Optional[float] = None
+    circ_mv: Optional[float] = None
+
+
+@dataclass
+class ChipDistribution:
+    """筹码分布数据"""
+    profit_ratio: float = 0.0
+    avg_cost: float = 0.0
+    concentration_90: float = 0.0
+    concentration_70: float = 0.0
+
+
+def _is_us_code(stock_code: str) -> bool:
+    """判断是否为美股代码（1-5个大写字母）"""
+    code = stock_code.strip().upper()
+    return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
+
+
+def _is_hk_code(stock_code: str) -> bool:
+    """判断是否为港股代码（5位数字）"""
+    code = stock_code.lower()
+    if code.startswith('hk'):
+        numeric_part = code[2:]
+        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
+    return code.isdigit() and len(code) == 5
+
+
+def _is_etf_code(stock_code: str) -> bool:
+    """判断是否为 ETF 代码"""
+    etf_prefixes = ('51', '52', '56', '58', '15', '16', '18')
+    return stock_code.startswith(etf_prefixes) and len(stock_code) == 6
+
+
+def normalize_code(stock_code: str) -> tuple:
+    """标准化股票代码"""
+    code = stock_code.strip()
+    if _is_us_code(code):
+        return 'us', code.upper()
+    if _is_hk_code(code):
+        if code.lower().startswith('hk'):
+            code = code[2:]
+        return 'hk', code.zfill(5)
+    return 'a', code
+
+
+def get_daily_data(stock_code: str, days: int = 60) -> Optional[pd.DataFrame]:
+    """获取股票日线数据（带重试）"""
+    market, code = normalize_code(stock_code)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days * 2)
+    
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            if market == 'us':
+                return _fetch_us_data(code, start_date, end_date)
+            elif market == 'hk':
+                return _fetch_hk_data(code, start_date, end_date)
+            else:
+                return _fetch_a_stock_data(code, start_date, end_date, days)
+        except Exception as e:
+            logger.warning(f"获取 {stock_code} 数据失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logger.error(f"获取 {stock_code} 数据最终失败: {e}")
+                return None
+
+
+def _fetch_a_stock_data(stock_code: str, start_date: datetime, end_date: datetime, days: int) -> pd.DataFrame:
+    """获取 A 股数据 - 使用新浪财经"""
+    if _is_etf_code(stock_code):
+        logger.warning(f"暂不支持ETF数据获取: {stock_code}")
+        return pd.DataFrame()
+    
+    # 新浪财经API - 深圳股票需要sz前缀，上海股票需要sh前缀
+    if stock_code.startswith('00') or stock_code.startswith('30') or stock_code.startswith('399'):
+        sina_code = f'sz{stock_code}'
+    else:
+        sina_code = f'sh{stock_code}'
+    
+    url = 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData'
+    params = {
+        'symbol': sina_code,
+        'scale': 240,  # 日线
+        'ma': 'no',
+        'datalen': min(200, days * 3)  # 获取足够的数据
+    }
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    response = session.get(url, params=params, headers=headers, timeout=15)
+    
+    if response.status_code != 200:
+        logger.error(f"新浪财经请求失败: HTTP {response.status_code}")
+        return pd.DataFrame()
+    
+    data_text = response.text.strip()
+    if not data_text:
+        logger.error("新浪财经返回空数据")
+        return pd.DataFrame()
+    
+    # 新浪返回的数据格式：({...})
+    if data_text.startswith('('):
+        data_text = data_text[1:-1]
+    
+    try:
+        df = pd.read_json(data_text)
+    except Exception as e:
+        logger.error(f"解析新浪财经数据失败: {e}")
+        return pd.DataFrame()
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 标准化列名
+    df = df.rename(columns={
+        'day': 'date',
+        'open': 'open',
+        'close': 'close',
+        'high': 'high',
+        'low': 'low',
+        'volume': 'volume'
+    })
+    
+    # 确保日期格式正确
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # 数值转换
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 计算涨跌幅
+    df['pct_chg'] = df['close'].pct_change() * 100
+    df['pct_chg'] = df['pct_chg'].fillna(0)
+    
+    # 计算成交额
+    df['amount'] = df['volume'] * df['close']
+    
+    # 去除空值行
+    df = df.dropna(subset=['close', 'volume'])
+    
+    # 按日期排序
+    df = df.sort_values('date', ascending=True).reset_index(drop=True)
+    
+    # 过滤日期范围
+    df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+    
+    return df
+
+
+def _fetch_hk_data(stock_code: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    """获取港股数据"""
+    logger.warning(f"暂不支持港股数据获取: {stock_code}")
+    return pd.DataFrame()
+
+
+def _fetch_us_data(stock_code: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    """获取美股数据"""
+    logger.warning(f"暂不支持美股数据获取: {stock_code}")
+    return pd.DataFrame()
+
+
+def get_realtime_quote(stock_code: str) -> Optional[StockQuote]:
+    """获取实时行情（带重试）"""
+    market, code = normalize_code(stock_code)
+    
+    if market != 'a':
+        logger.warning(f"暂不支持A股以外市场的实时行情: {stock_code}")
+        return None
+    
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            return _get_a_stock_realtime_quote(code)
+        except Exception as e:
+            logger.warning(f"获取实时行情失败 {stock_code} (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logger.warning(f"获取实时行情最终失败 {stock_code}: {e}")
+                return None
+
+
+def _get_a_stock_realtime_quote(stock_code: str) -> Optional[StockQuote]:
+    """获取 A 股实时行情 - 使用新浪财经"""
+    if _is_etf_code(stock_code):
+        logger.warning(f"暂不支持ETF实时行情: {stock_code}")
+        return None
+    
+    # 新浪财经API
+    if stock_code.startswith('00') or stock_code.startswith('30') or stock_code.startswith('399'):
+        sina_code = f'sz{stock_code}'
+    else:
+        sina_code = f'sh{stock_code}'
+    
+    url = f'http://hq.sinajs.cn/list={sina_code}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0'
+    }
+    
+    response = session.get(url, headers=headers, timeout=10)
+    
+    if response.status_code != 200:
+        return None
+    
+    # 解析新浪数据格式
+    data_str = response.text
+    if not data_str or 'var hq_str_' not in data_str:
+        return None
+    
+    # 提取数据部分
+    start = data_str.find('"') + 1
+    end = data_str.rfind('"')
+    data_str = data_str[start:end]
+    
+    if not data_str or data_str == '':
+        return None
+    
+    parts = data_str.split(',')
+    if len(parts) < 32:
+        return None
+    
+    # 新浪数据格式: 名称, 开盘, 昨收, 现价, 最高, 最低, ...
+    name = parts[0]
+    open_price = float(parts[1]) if parts[1] else 0
+    pre_close = float(parts[2]) if parts[2] else 0
+    price = float(parts[3]) if parts[3] else 0
+    high = float(parts[4]) if parts[4] else 0
+    low = float(parts[5]) if parts[5] else 0
+    
+    volume = int(float(parts[8])) if parts[8] else 0
+    amount = float(parts[9]) if parts[9] else 0
+    
+    # 计算涨跌幅
+    change_amount = price - pre_close
+    change_pct = (change_amount / pre_close * 100) if pre_close > 0 else 0
+    
+    # 日期和成交量数据位置不确定，简化处理
+    return StockQuote(
+        code=stock_code,
+        name=name,
+        price=price,
+        change_pct=change_pct,
+        change_amount=change_amount,
+        volume=volume,
+        amount=amount,
+        open_price=open_price,
+        high=high,
+        low=low,
+        pre_close=pre_close
+    )
+
+
+def get_chip_distribution(stock_code: str) -> Optional[ChipDistribution]:
+    """获取筹码分布数据（暂不支持）"""
+    logger.warning(f"暂不支持筹码分布数据获取: {stock_code}")
+    return None
+
+
+def get_stock_name(stock_code: str) -> str:
+    """获取股票名称"""
+    quote = get_realtime_quote(stock_code)
+    if quote and quote.name:
+        return quote.name
+    return stock_code

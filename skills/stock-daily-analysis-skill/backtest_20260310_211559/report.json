@@ -1,0 +1,35 @@
+{
+  "backtest_time": "2026-03-10T21:15:59.756544",
+  "config": {
+    "stocks": [
+      "000592"
+    ],
+    "start_date": "2025-05-09",
+    "end_date": "2026-03-10",
+    "init_cash": 1000000,
+    "position_size": 1.0,
+    "max_positions": 1,
+    "weights": {
+      "trend": 30,
+      "bias": 20,
+      "volume": 15,
+      "support": 10,
+      "macd": 15,
+      "rsi": 10
+    },
+    "buy_threshold": 60,
+    "sell_threshold": 30,
+    "stop_loss": -0.08,
+    "take_profit": 0.15
+  },
+  "results": {
+    "total_return": 1.7894774510306,
+    "annual_return": 2.642158129912832,
+    "sharpe_ratio": 2.826546311966786,
+    "max_drawdown": -0.18875757358676795,
+    "win_rate": 0.7272727272727273,
+    "avg_profit": 0.10667486529613224,
+    "total_trades": 11,
+    "final_equity": 2789477.4510306
+  }
+}
